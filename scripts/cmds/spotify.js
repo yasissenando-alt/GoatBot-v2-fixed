@@ -1,5 +1,9 @@
 const axios = require("axios");
 
+/**
+ * 🔴 ROOT FIX
+ * GoatBot V2 DOES NOT auto-create handleReply
+ */
 if (!global.client.handleReply) {
   global.client.handleReply = [];
 }
@@ -7,29 +11,31 @@ if (!global.client.handleReply) {
 module.exports = {
   config: {
     name: "spotify",
-    version: "1.0.1",
-    author: "April Manalo (fixed)",
+    version: "1.0.2",
+    author: "April Manalo (final fixed)",
     role: 0,
     category: "music",
     guide: "-spotify <song name>"
   },
 
+  // ==========================
+  // START COMMAND
+  // ==========================
   onStart: async function ({ api, event, args }) {
-    const { threadID, senderID } = event;
-    const query = args.join(" ").trim();
-
-    if (!query) {
-      return api.sendMessage(
-        "⚠️ Usage: -spotify <song name>",
-        threadID
-      );
-    }
-
     try {
-      const searching = await api.sendMessage(
-        "🔎 Searching Spotify...",
-        threadID
-      );
+      const { threadID, senderID } = event;
+      const query = args.join(" ").trim();
+
+      console.log("[SPOTIFY] onStart triggered:", query);
+
+      if (!query) {
+        return api.sendMessage(
+          "⚠️ Usage: -spotify <song name>",
+          threadID
+        );
+      }
+
+      await api.sendMessage("🔎 Searching Spotify...", threadID);
 
       const res = await axios.get(
         "https://norch-project.gleeze.com/api/spotify",
@@ -37,6 +43,9 @@ module.exports = {
       );
 
       const songs = res.data?.results?.slice(0, 5);
+
+      console.log("[SPOTIFY] Search results:", songs?.length);
+
       if (!songs || !songs.length) {
         return api.sendMessage("❌ No results found.", threadID);
       }
@@ -49,7 +58,8 @@ module.exports = {
 
       const listMsg = await api.sendMessage(text, threadID);
 
-      // ✅ PROPER handleReply
+      console.log("[SPOTIFY] Register handleReply:", listMsg.messageID);
+
       global.client.handleReply.push({
         name: this.config.name,
         type: "spotify_selection",
@@ -59,28 +69,51 @@ module.exports = {
       });
 
     } catch (err) {
-      console.error("[SPOTIFY SEARCH]", err);
-      api.sendMessage("❌ Failed to search.", threadID);
+      console.error("[SPOTIFY onStart ERROR]", err);
     }
   },
 
+  // ==========================
+  // REPLY HANDLER
+  // ==========================
   onReply: async function ({ api, event, handleReply }) {
-    const { threadID, senderID, body } = event;
-
-    if (senderID !== handleReply.author) return;
-    if (handleReply.type !== "spotify_selection") return;
-
-    const index = parseInt(body);
-    if (isNaN(index) || index < 1 || index > handleReply.songs.length) {
-      return api.sendMessage("❌ Invalid number.", threadID);
-    }
-
-    const song = handleReply.songs[index - 1];
-    if (!song.spotify_url) {
-      return api.sendMessage("❌ Invalid track URL.", threadID);
-    }
-
     try {
+      console.log("[SPOTIFY] onReply fired");
+
+      if (!handleReply) {
+        console.log("[SPOTIFY] handleReply is UNDEFINED");
+        return;
+      }
+
+      const { threadID, senderID, body } = event;
+
+      console.log("[SPOTIFY] Reply body:", body);
+      console.log("[SPOTIFY] handleReply data:", handleReply);
+
+      if (senderID !== handleReply.author) {
+        console.log("[SPOTIFY] Sender mismatch");
+        return;
+      }
+
+      if (handleReply.type !== "spotify_selection") {
+        console.log("[SPOTIFY] Wrong type:", handleReply.type);
+        return;
+      }
+
+      const index = parseInt(body);
+      console.log("[SPOTIFY] Parsed index:", index);
+
+      if (isNaN(index) || index < 1 || index > handleReply.songs.length) {
+        return api.sendMessage("❌ Invalid number.", threadID);
+      }
+
+      const song = handleReply.songs[index - 1];
+      console.log("[SPOTIFY] Selected song:", song);
+
+      if (!song.spotify_url) {
+        throw new Error("spotify_url is missing");
+      }
+
       await api.sendMessage(
         `⬇️ Downloading\n🎵 ${song.title}\n👤 ${song.artist}`,
         threadID
@@ -92,11 +125,13 @@ module.exports = {
       );
 
       const track = dl.data?.trackData?.[0];
+      console.log("[SPOTIFY] Download response:", track);
+
       if (!track?.download_url) {
-        throw new Error("No download link");
+        throw new Error("No download_url");
       }
 
-      // 🎨 Cover
+      // 🎨 Cover image
       if (track.image) {
         await api.sendMessage(
           {
@@ -117,15 +152,17 @@ module.exports = {
         threadID
       );
 
-      // 🧹 cleanup (SAFE)
+      // 🧹 CLEANUP
       global.client.handleReply =
         global.client.handleReply.filter(
           r => r.messageID !== handleReply.messageID
         );
 
+      console.log("[SPOTIFY] Done & cleaned");
+
     } catch (err) {
-      console.error("[SPOTIFY DOWNLOAD]", err);
-      api.sendMessage("❌ Download failed.", threadID);
+      console.error("[SPOTIFY onReply ERROR]", err);
+      api.sendMessage("❌ Download failed. Check logs.", event.threadID);
     }
   }
 };
