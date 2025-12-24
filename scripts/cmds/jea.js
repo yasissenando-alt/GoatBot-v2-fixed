@@ -1,137 +1,163 @@
 const axios = require("axios");
 
+// ======================
+// GLOBAL STATE
+// ======================
 let simEnabled = false;
+const cooldown = new Map();
 
+// ======================
+// AI FUNCTION
+// ======================
 async function getSimReply(api, event, prompt) {
-  const uid = event.senderID;
-  let name = "User";
-
-  // ✅ ws3-fca SAFE NAME DETECTION
   try {
-    const threadInfo = await api.getThreadInfo(event.threadID);
+    const uid = event.senderID;
+    let name = "User";
 
-    // real FB name
-    const user = threadInfo.userInfo?.find(u => u.id === uid);
-    if (user?.name && user.name !== "Facebook User") {
-      name = user.name.split(" ")[0];
+    // SAFE get name
+    try {
+      const threadInfo = await api.getThreadInfo(event.threadID);
+      const user = threadInfo.userInfo?.find(u => u.id === uid);
+
+      if (user?.name && user.name !== "Facebook User") {
+        name = user.name.split(" ")[0];
+      }
+
+      if (threadInfo.nicknames?.[uid]) {
+        name = threadInfo.nicknames[uid];
+      }
+    } catch {
+      // ignore
     }
 
-    // nickname override
-    if (threadInfo.nicknames && threadInfo.nicknames[uid]) {
-      name = threadInfo.nicknames[uid];
-    }
-  } catch (e) {
-    console.warn("[SIM] getThreadInfo failed");
-  }
-
-  // final fallback
-  if (!name || name === "Facebook User") {
-    name = `User_${String(uid).slice(-4)}`;
-  }
-
-  const apiBase = "https://norch-project.gleeze.com/api/jea";
-  const usePost = prompt.length > 800;
-
-  try {
-    let data;
-
-    if (usePost) {
-      const res = await axios.post(
-        apiBase,
-        { prompt, uid, name },
-        { timeout: 12000 }
-      );
-      data = res.data;
-    } else {
-      const res = await axios.get(apiBase, {
-        params: { prompt, uid, name },
-        timeout: 12000
-      });
-      data = res.data;
+    if (!name || name === "Facebook User") {
+      name = `User_${String(uid).slice(-4)}`;
     }
 
-    if (!data?.reply) {
-      throw new Error("Invalid API response");
-    }
+    const apiBase = "https://norch-project.gleeze.com/api/jea";
 
-    return data.reply;
+    const res = await axios.get(apiBase, {
+      params: { prompt, uid, name },
+      timeout: 15000
+    });
+
+    if (!res.data?.reply) return null;
+
+    return res.data.reply;
 
   } catch (err) {
-    console.error("[SIM API ERROR]", err?.message || err);
+    console.error("[JEA API ERROR]", err.message);
     return null;
   }
 }
 
+// ======================
+// MODULE EXPORT
+// ======================
 module.exports = {
   config: {
-    name: "Jea",
-    version: "3.0.0",
-    author: "April Manalo",
+    name: "jea",
+    version: "3.1.0",
+    author: "April Manalo (fixed)",
     role: 0,
     category: "ai",
-    guide: "jea [on | off | message]: Enable/disable auto-reply or send a message"
+    guide: "-jea on | off | <message>"
   },
 
+  // ======================
+  // COMMAND
+  // ======================
   onStart: async function ({ api, event, args }) {
-    const action = args[0]?.toLowerCase();
+    try {
+      const action = args[0]?.toLowerCase();
 
-    // Toggle on/off
-    if (action === "on") {
-      simEnabled = true;
-      return api.sendMessage(
-        "✅ Jea auto-reply is now ON. I'll respond to all messages automatically.",
-        event.threadID,
-        String(event.messageID)
-      );
-    }
+      if (action === "on") {
+        simEnabled = true;
+        return api.sendMessage(
+          "✅ Jea auto-reply is now ON.",
+          event.threadID,
+          event.messageID
+        );
+      }
 
-    if (action === "off") {
-      simEnabled = false;
-      return api.sendMessage(
-        "❌ Jea auto-reply is now OFF. Use -jea <message> to ask me.",
-        event.threadID,
-        String(event.messageID)
-      );
-    }
+      if (action === "off") {
+        simEnabled = false;
+        return api.sendMessage(
+          "❌ Jea auto-reply is now OFF.",
+          event.threadID,
+          event.messageID
+        );
+      }
 
-    // If no args or first arg is not on/off, treat entire input as prompt
-    const prompt = args.join(" ").trim();
-    if (!prompt) {
-      return api.sendMessage(
-        "⚠️ Please type a message.\nExample: -jea hello\n\nOr toggle auto-reply:\n-jea on\n-sim off",
-        event.threadID,
-        String(event.messageID)
-      );
-    }
+      const prompt = args.join(" ").trim();
+      if (!prompt) {
+        return api.sendMessage(
+          "⚠️ Usage:\n-jea on\n-jea off\n-jea <message>",
+          event.threadID,
+          event.messageID
+        );
+      }
 
-    // Get sim response
-    const reply = await getSimReply(api, event, prompt);
-    if (reply) {
+      const reply = await getSimReply(api, event, prompt);
+      if (!reply) {
+        return api.sendMessage(
+          "⚠️ Jea is unavailable.",
+          event.threadID,
+          event.messageID
+        );
+      }
+
       return api.sendMessage(
         reply,
         event.threadID,
-        String(event.messageID)
+        event.messageID
       );
-    } else {
-      return api.sendMessage(
-        "⚠️ jea is currently unavailable.",
-        event.threadID,
-        String(event.messageID)
-      );
+
+    } catch (err) {
+      console.error("[JEA onStart ERROR]", err);
     }
   },
 
+  // ======================
+  // AUTO CHAT
+  // ======================
   onChat: async function ({ api, event }) {
-    if (simEnabled && event.senderID !== api.getCurrentUserID()) {
-      const prompt = event.body?.trim();
-      
-      if (!prompt) return;
+    try {
+      // must be enabled
+      if (!simEnabled) return;
 
-      // Get sim response
-      const reply = await getSimReply(api, event, prompt);
-      if (reply) {
-        api.sendMessage(reply, event.threadID, String(event.messageID));
-      }
+      // ignore bot itself
+      if (event.senderID === api.getCurrentUserID()) return;
+
+      // ignore non-text
+      if (!event.body || typeof event.body !== "string") return;
+
+      const body = event.body.trim();
+
+      // ignore commands
+      if (body.startsWith("-")) return;
+
+      // ignore very short
+      if (body.length < 2) return;
+
+      // cooldown (5 sec per user)
+      const now = Date.now();
+      if (cooldown.get(event.senderID) > now - 5000) return;
+      cooldown.set(event.senderID, now);
+
+      console.log("[JEA] Auto-reply:", body);
+
+      const reply = await getSimReply(api, event, body);
+      if (!reply) return;
+
+      await api.sendMessage(
+        reply,
+        event.threadID,
+        event.messageID
+      );
+
+    } catch (err) {
+      console.error("[JEA onChat ERROR]", err);
     }
   }
 };
