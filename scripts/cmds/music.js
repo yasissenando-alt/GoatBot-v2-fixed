@@ -118,7 +118,7 @@ module.exports = {
       // 🎵 SEND MP3 FILE
       await api.sendMessage(
         {
-          body: "📁 Here is your audio file:",
+          body: "📁 Here is your audio:",
           attachment: await global.utils.getStreamFromURL(data.downloadUrl)
         },
         threadID
